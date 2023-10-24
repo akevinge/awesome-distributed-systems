@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package gfs.grpc;
+
+import "common/chunk_server.proto";
+import "common/empty.proto";
+
+service Master {
+  rpc CreateFile(CreateFileRequest) returns (common.Empty);
+  rpc ReportChunkServer(common.ChunkServer) returns (common.Empty);
+}
+
+message CreateFileRequest {
+  string filename = 1;
+}

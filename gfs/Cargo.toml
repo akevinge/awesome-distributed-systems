@@ -1,0 +1,2 @@
+[workspace]
+members = ["master_server", "chunk_server", "proto", "cli", "client"]

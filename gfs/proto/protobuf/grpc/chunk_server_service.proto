@@ -1,0 +1,49 @@
+syntax = "proto3";
+
+package gfs.grpc;
+
+import "common/empty.proto";
+import "common/chunk_server.proto";
+
+service ChunkServer {
+  rpc InitEmptyChunk(InitEmptyChunkRequest) returns (common.Empty);
+  rpc Heartbeat(common.Empty) returns (common.Empty);
+  rpc AdvanceChunkVersion(AdvanceChunkVersionRequest) returns (common.Empty);
+  rpc GrantLease(GrantLeaseRequest) returns (common.Empty);
+  rpc WriteChunk(WriteChunkRequest) returns (common.Empty);
+  rpc ApplyMutations(ApplyMutationsRequest) returns (common.Empty);
+}
+
+message InitEmptyChunkRequest {
+  string chunk_handle = 1;
+}
+
+message AdvanceChunkVersionRequest {
+  string chunk_handle = 1;
+  uint64 new_version = 2;
+}
+
+
+message GrantLeaseRequest {
+  string chunk_handle = 1;
+  common.ChunkServer lease_holder = 2;
+  uint64 expiration_unix_secs = 3;
+}
+
+message WriteChunkRequest {
+  WriteChunkHeader header =1 ;
+
+  repeated common.ChunkServerLocation replica_locations = 2;
+}
+
+message WriteChunkHeader {
+  string chunk_handle = 1;
+  int64 chunk_version = 2;
+  int64 start_offset = 3;
+  bytes data = 4;
+}
+
+
+message ApplyMutationsRequest {
+  repeated WriteChunkHeader write_chunks = 1;
+}

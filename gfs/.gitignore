@@ -1,0 +1,4 @@
+target/
+
+# Global disk for all chunk servers running locally.
+global_disk/

@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+package gfs.metadata;
+
+import "common/chunk_server.proto";
+
+message FileMetadata {
+  // File name
+  string filename = 1;
+
+  // Mapping of chunk index to chunk handle.
+  // The GFS client calculates the chunk index given a byte offset.
+  map<uint32, string> chunks = 2;
+}
+
+message FileChunkMetadata {
+  // Chunk handle
+  string chunk_handle = 1;
+  
+  // Version
+  uint32 version = 2;
+
+  // Primary replica
+  common.ChunkServerLocation primary_location = 3;
+
+  // List of all replicas
+  repeated common.ChunkServerLocation replica_locations = 4;
+}

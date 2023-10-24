@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package gfs.common;
+
+message ChunkServerLocation {
+    string address = 1;
+
+    uint32 port = 2;
+}
+
+message ChunkServer {
+    ChunkServerLocation location = 1;
+
+    uint64 available_space_mb = 3;
+}
