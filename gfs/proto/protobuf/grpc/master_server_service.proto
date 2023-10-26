@@ -16,4 +16,11 @@ service Master {
 message OpenFileRequest {
   string filename = 1;
   uint32 chunk_index = 2;
+  OpenMode mode = 3;
+
+  enum OpenMode {
+    CREATE = 0;
+    READ = 1;
+    WRITE = 2;
+  }
 }

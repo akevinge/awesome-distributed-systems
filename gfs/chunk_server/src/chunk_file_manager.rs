@@ -10,7 +10,7 @@ use thiserror::Error;
 #[derive(Debug, Clone, Default)]
 pub struct ChunkFile {
     filename: String,
-    version: u64,
+    version: u32,
     disk_path: String,
 }
 
@@ -27,7 +27,7 @@ const GLOBALCHUNK_SERVER_DIR: &str = "global_disk/data/";
 const BYTES_64_MB: &u64 = &(64 * 1024 * 1024);
 
 impl ChunkFileManager {
-    pub fn advance_chunk_version(&self, chunk_handle: &String, new_version: u64) -> Result<()> {
+    pub fn advance_chunk_version(&self, chunk_handle: &String, new_version: u32) -> Result<()> {
         let mut chunk_file = self.chunk_files.get(chunk_handle).ok_or(anyhow!(
             "chunk handle {} not found for version",
             chunk_handle

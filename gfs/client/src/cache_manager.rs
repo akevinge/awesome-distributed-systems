@@ -1,16 +1,17 @@
 use std::collections::HashMap;
 
+use common::concurrent_hash_map::ConcurrentHashMap;
 use proto::metadata::{FileChunkMetadata, FileMetadata};
 
 #[derive(Debug, Default)]
 pub struct CacheManager {
-    file_metadata: HashMap<String, FileMetadata>,
-    chunk_metadata: HashMap<String, FileChunkMetadata>,
+    file_metadata: ConcurrentHashMap<String, FileMetadata>,
+    chunk_metadata: ConcurrentHashMap<String, FileChunkMetadata>,
 }
 
 impl CacheManager {
     pub fn cache_metadata(
-        &mut self,
+        &self,
         filename: &str,
         chunk_index: u32,
         chunk_metadata: FileChunkMetadata,
@@ -30,6 +31,6 @@ impl CacheManager {
         self.file_metadata
             .get(filename)
             .and_then(|metadata| metadata.chunks.get(&chunk_index).cloned())
-            .and_then(|chunk_handle| self.chunk_metadata.get(&chunk_handle).cloned())
+            .and_then(|chunk_handle| self.chunk_metadata.get(&chunk_handle))
     }
 }

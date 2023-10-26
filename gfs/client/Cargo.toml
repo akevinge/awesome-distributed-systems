@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+common = { path = "../common" }
 tokio = { version = "1.0", features = ["rt-multi-thread"] }
 proto = { path = "../proto" }
 tonic = "0.10"

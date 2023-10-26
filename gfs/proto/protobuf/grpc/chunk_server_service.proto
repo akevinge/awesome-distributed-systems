@@ -20,7 +20,7 @@ message InitEmptyChunkRequest {
 
 message AdvanceChunkVersionRequest {
   string chunk_handle = 1;
-  uint64 new_version = 2;
+  uint32 new_version = 2;
 }
 
 
@@ -38,8 +38,8 @@ message WriteChunkRequest {
 
 message WriteChunkHeader {
   string chunk_handle = 1;
-  int64 chunk_version = 2;
-  int64 start_offset = 3;
+  uint32 chunk_version = 2;
+  uint64 start_offset = 3;
   bytes data = 4;
 }
 

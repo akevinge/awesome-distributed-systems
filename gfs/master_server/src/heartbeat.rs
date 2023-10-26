@@ -1,8 +1,9 @@
 use std::{sync::Arc, thread, time::Duration};
 
+use common::conn;
 use proto::common::Empty;
 
-use crate::chunk_server_manager::{connect_to_chunk_server, ChunkServerManager};
+use crate::chunk_server_manager::ChunkServerManager;
 
 /// Hearbeat is a background thread that periodically sends heartbeat to all chunk servers.
 #[derive(Debug)]
@@ -31,10 +32,14 @@ impl Heartbeat {
 
                 for (server, _) in self.cs_manager.server_iter() {
                     let cs_client = match server.borrow_inner().location.as_ref() {
-                        Some(loc) => connect_to_chunk_server(loc).await.map_err(|e| {
-                            // TODO: implement retry/cleanup.
-                            println!("Failed to connect to chunk server: {}", e);
-                        }),
+                        Some(loc) => {
+                            conn::connect_to_chunk_server(loc.address.to_owned(), loc.port)
+                                .await
+                                .map_err(|e| {
+                                    // TODO: implement retry/cleanup.
+                                    println!("Failed to connect to chunk server: {}", e);
+                                })
+                        }
                         None => unreachable!("Chunk server location not provided."),
                     };
 
