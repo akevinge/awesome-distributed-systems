@@ -73,7 +73,7 @@ impl ChunkServer for ChunkServerImpl {
         &self,
         _: tonic::Request<common::Empty>,
     ) -> Result<tonic::Response<Empty>, tonic::Status> {
-        println!("Got a request: heartbeat");
+        println!("Got a heartbeat request.");
         Ok(tonic::Response::new(Empty {}))
     }
 
@@ -84,13 +84,13 @@ impl ChunkServer for ChunkServerImpl {
         &self,
         request: tonic::Request<InitEmptyChunkRequest>,
     ) -> Result<tonic::Response<Empty>, tonic::Status> {
-        debug!("Got a init_empty_chunk request: {:?}", request);
+        debug!("Got a init_empty_chunk request: {:?}.", request);
         let chunk_handle = &request.get_ref().chunk_handle;
 
         self.file_manager
             .init_chunk(self.id, chunk_handle.to_owned(), chunk_handle.to_owned())
             .map_err(|e| {
-                error!("Failed to init chunk: {:?}", e);
+                error!("Failed to init chunk: {:?}.", e);
                 tonic::Status::internal(format!("Failed to init chunk: {}", e))
             })?;
 
@@ -101,14 +101,14 @@ impl ChunkServer for ChunkServerImpl {
         &self,
         request: tonic::Request<AdvanceChunkVersionRequest>,
     ) -> Result<tonic::Response<Empty>, tonic::Status> {
-        debug!("Got advance_chunk_version request: {:?}", request);
+        debug!("Got advance_chunk_version request: {:?}.", request);
         let chunk_handle = &request.get_ref().chunk_handle;
         let new_version = &request.get_ref().new_version;
 
         self.file_manager
             .advance_chunk_version(chunk_handle, *new_version)
             .map_err(|e| {
-                error!("Failed to advance chunk version: {:?}", e);
+                error!("Failed to advance chunk version: {:?}.", e);
                 tonic::Status::not_found(format!("Failed to advance chunk version: {}", e))
             })?;
 
@@ -132,7 +132,7 @@ impl ChunkServer for ChunkServerImpl {
         &self,
         request: tonic::Request<WriteChunkRequest>,
     ) -> Result<tonic::Response<Empty>, tonic::Status> {
-        debug!("Got a request: {:?}", request);
+        debug!("Got a write_chunk request: {:?}.", request);
         Ok(tonic::Response::new(Empty {}))
     }
 
@@ -140,7 +140,7 @@ impl ChunkServer for ChunkServerImpl {
         &self,
         request: tonic::Request<ApplyMutationsRequest>,
     ) -> Result<tonic::Response<Empty>, tonic::Status> {
-        debug!("Got a request: {:?}", request);
+        debug!("Got a apply_mutations request: {:?}.", request);
         Ok(tonic::Response::new(Empty {}))
     }
 }

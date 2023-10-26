@@ -283,6 +283,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "client",
+ "env_logger",
  "tokio",
 ]
 
@@ -291,6 +292,7 @@ name = "client"
 version = "0.1.0"
 dependencies = [
  "common",
+ "log",
  "proto",
  "tokio",
  "tonic",

@@ -1,5 +1,6 @@
 use cache_manager::CacheManager;
 use common::{conn, utils};
+use log::debug;
 use proto::{
     common::Empty,
     grpc::{
@@ -89,7 +90,7 @@ impl Client {
             let chunk_server_locations = utils::get_locations(chunk_metadata.clone());
             let mut task_set = JoinSet::new();
             for loc in chunk_server_locations {
-                println!("Sending write_chunk request to {:?}", loc);
+                debug!("Sending write_chunk request to {:?}", loc);
                 let chunk_handle = chunk_metadata.chunk_handle.clone();
                 let data = data.clone();
                 let chunk_version = chunk_metadata.version;

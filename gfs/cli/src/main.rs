@@ -18,6 +18,7 @@ enum Operation {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    env_logger::init();
     let args = Args::parse();
     let mut client = Client::new("http://[::1]:50551".into());
     match args.operation {
