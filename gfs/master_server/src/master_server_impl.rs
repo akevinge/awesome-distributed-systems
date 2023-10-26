@@ -1,3 +1,4 @@
+use std::fs::File;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -6,7 +7,7 @@ use super::heartbeat::Heartbeat;
 use super::metdata_manager::MetadataManager;
 use proto::{
     common::{ChunkServer, ChunkServerLocation, Empty},
-    grpc::{master_server::Master, CreateFileRequest, InitEmptyChunkRequest},
+    grpc::{master_server::Master, InitEmptyChunkRequest, OpenFileRequest},
     metadata::FileChunkMetadata,
 };
 use tonic::Request;
@@ -63,22 +64,24 @@ impl Master for MasterImpl {
         Ok(tonic::Response::new(Empty {}))
     }
 
-    /// Create a new file.
+    /// Open a new file, create if it doesn't exist.
     /// This is called by clients when they want to create a new file.
     /// The master server will set aside N (configurable) chunk servers to allocate chunks for the file
     /// and calls init_empty_chunk on each of them.
-    async fn create_file(
+    async fn open_file(
         &self,
-        request: tonic::Request<CreateFileRequest>,
-    ) -> Result<tonic::Response<Empty>, tonic::Status> {
-        let request = request.into_inner();
+        request: tonic::Request<OpenFileRequest>,
+    ) -> Result<tonic::Response<FileChunkMetadata>, tonic::Status> {
+        let filename = &request.get_ref().filename;
+        let chunk_index = &request.get_ref().chunk_index;
 
         // Check if file already exists.
-        if self.metadata_manager.file_exists(&request.filename) {
-            return Err(tonic::Status::already_exists(format!(
-                "File {} already exists",
-                request.filename
-            )));
+        if self.metadata_manager.file_exists(filename) {
+            let metadata = self
+                .metadata_manager
+                .get_metadata(filename, *chunk_index)
+                .expect("unreachable");
+            return Ok(tonic::Response::new(metadata));
         }
 
         // Create new chunk handle and allocate chunk servers.
@@ -118,8 +121,8 @@ impl Master for MasterImpl {
             ..Default::default()
         };
         self.metadata_manager
-            .add_file(&request.filename, new_chunk_handle, chunk_metadata);
+            .add_file(filename, new_chunk_handle, chunk_metadata.to_owned());
 
-        Ok(tonic::Response::new(Empty {}))
+        Ok(tonic::Response::new(chunk_metadata))
     }
 }

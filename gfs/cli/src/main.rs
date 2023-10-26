@@ -18,8 +18,9 @@ enum Operation {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
-    let mut client = Client::new().await?;
+    let mut client = Client::new("http://[::1]:50551".into());
     match args.operation {
-        Operation::Open => client.open(&args.filename).await,
+        Operation::Open => client.open(&args.filename).await?,
     }
+    Ok(())
 }

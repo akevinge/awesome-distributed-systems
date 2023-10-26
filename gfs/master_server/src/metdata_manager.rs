@@ -24,6 +24,13 @@ impl MetadataManager {
         handle
     }
 
+    pub fn get_metadata(&self, filename: &String, chunk_index: u32) -> Option<FileChunkMetadata> {
+        self.file_metadata
+            .get(filename)
+            .and_then(|metadata| metadata.chunks.get(&chunk_index).cloned())
+            .and_then(|chunk_handle| self.chunk_metadata.get(&chunk_handle))
+    }
+
     pub fn add_file(
         &self,
         filename: &str,

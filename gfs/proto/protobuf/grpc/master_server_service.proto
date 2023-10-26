@@ -4,12 +4,16 @@ package gfs.grpc;
 
 import "common/chunk_server.proto";
 import "common/empty.proto";
+import "metadata.proto";
 
 service Master {
-  rpc CreateFile(CreateFileRequest) returns (common.Empty);
+  // OpenFile returns the metadata of the file and creates
+  // the file if it doesn't exist.
+  rpc OpenFile(OpenFileRequest) returns (metadata.FileChunkMetadata);
   rpc ReportChunkServer(common.ChunkServer) returns (common.Empty);
 }
 
-message CreateFileRequest {
+message OpenFileRequest {
   string filename = 1;
+  uint32 chunk_index = 2;
 }
