@@ -1,15 +1,16 @@
 use cache_manager::CacheManager;
-use common::{conn, utils};
+use common::{
+    conn,
+    utils::{self, calc_checksum},
+};
 use log::debug;
-use proto::{
-    common::Empty,
-    grpc::{
-        master_client::MasterClient, open_file_request::OpenMode, OpenFileRequest,
-        WriteChunkHeader, WriteChunkRequest,
-    },
+use proto::grpc::{
+    master_client::MasterClient, open_file_request::OpenMode, send_chunk_data_response,
+    OpenFileRequest, SendChunkDataRequest, SendChunkDataResponse, WriteChunkHeader,
+    WriteChunkRequest,
 };
 use tokio::task::JoinSet;
-use tonic::Request;
+use tonic::{Request, Response};
 
 mod cache_manager;
 
@@ -68,55 +69,99 @@ impl Client {
         Ok(())
     }
 
+    // Write data to chunk at given offset.
+    async fn write_chunk(
+        &self,
+        filename: &String,
+        chunk_index: u32,
+        start_offset: u32,
+        data: &Vec<u8>,
+    ) -> Result<()> {
+        // Get chunk metadata.
+        // Create chunk if it doesn't exist.
+        let chunk_metadata = &match self.cache_manager.get_metadata(filename, chunk_index) {
+            Some(metadata) => metadata,
+            None => {
+                self.open_with_index(filename, chunk_index, OpenMode::Write)
+                    .await?;
+                self.cache_manager
+                    .get_metadata(filename, chunk_index)
+                    .expect("unreachable")
+            }
+        };
+
+        // Send data to primary and all replicas.
+        let chunk_server_locations = utils::get_locations(chunk_metadata.clone());
+        let mut task_set = JoinSet::new();
+        let checksum = calc_checksum(data.as_slice());
+
+        for loc in chunk_server_locations {
+            debug!("Sending data to {:?}", loc);
+            let data = data.clone();
+            let checksum = checksum.clone();
+            task_set.spawn(async move {
+                let mut cs_client = conn::connect_to_chunk_server(loc.address, loc.port).await?;
+                let request = SendChunkDataRequest { checksum, data };
+                let res = cs_client.send_chunk_data(request).await?;
+                Ok(res) as Result<Response<SendChunkDataResponse>>
+            });
+        }
+
+        // Wait for all servers to be written to.
+        while let Some(res) = task_set.join_next().await {
+            match res {
+                Ok(r) => match r {
+                    Ok(r) => {
+                        if r.into_inner().status != send_chunk_data_response::Status::Ok.into() {
+                            // TODO: Propagate error
+                        }
+                    }
+                    Err(_) => {
+                        // TODO: Propagate error
+                    }
+                },
+                Err(e) => {
+                    // TODO: Propagate error
+                }
+                _ => {}
+            }
+        }
+
+        // Send write chunk request to primary.
+        // Connect to primary.
+        let primary = chunk_metadata
+            .primary_location
+            .clone()
+            .expect("missing primary");
+        let mut cs_client =
+            conn::connect_to_chunk_server(primary.address.to_owned(), primary.port).await?;
+
+        // Send write_chunk request to primary.
+        let header = WriteChunkHeader {
+            chunk_handle: chunk_metadata.chunk_handle.clone(),
+            chunk_version: chunk_metadata.version,
+            checksum: checksum.to_owned(),
+            start_offset,
+        };
+        let replica_locations = chunk_metadata.replica_locations.clone();
+        let request = Request::new(WriteChunkRequest {
+            header: Some(header),
+            replica_locations,
+        });
+        cs_client.write_chunk(request).await?;
+        Ok(())
+    }
+
+    // Write data to file at given offset.
     pub async fn write(&self, filename: &String, start_offset: u32, data: Vec<u8>) -> Result<()> {
+        // Calculate chunk index and number of chunks to write to.
         let starting_chunk = start_offset / CHUNK_SIZE_BYTES; // 0-indexed chunk to start writing to.
         let chunk_count = data.len() as u32 / CHUNK_SIZE_BYTES; // 0-indexed number of chunks to write to.
         let ending_chunk = starting_chunk + chunk_count + 1;
-        for i in starting_chunk..ending_chunk {
-            let chunk_index = i / CHUNK_SIZE_BYTES;
-            let chunk_offset = i % CHUNK_SIZE_BYTES;
-
-            let chunk_metadata = &match self.cache_manager.get_metadata(filename, chunk_index) {
-                Some(metadata) => metadata,
-                None => {
-                    self.open_with_index(filename, chunk_index, OpenMode::Write)
-                        .await?;
-                    self.cache_manager
-                        .get_metadata(filename, chunk_index)
-                        .expect("unreachable")
-                }
-            };
-
-            let chunk_server_locations = utils::get_locations(chunk_metadata.clone());
-            let mut task_set = JoinSet::new();
-            for loc in chunk_server_locations {
-                debug!("Sending write_chunk request to {:?}", loc);
-                let chunk_handle = chunk_metadata.chunk_handle.clone();
-                let data = data.clone();
-                let chunk_version = chunk_metadata.version;
-                let replica_locations = chunk_metadata.replica_locations.clone();
-                task_set.spawn(async move {
-                    let mut conn = conn::connect_to_chunk_server(loc.address, loc.port).await?;
-                    let write_request = Request::new(WriteChunkRequest {
-                        header: Some(WriteChunkHeader {
-                            chunk_version,
-                            chunk_handle,
-                            data,
-                            start_offset: chunk_offset as u64,
-                        }),
-                        replica_locations,
-                    });
-                    Ok(conn.write_chunk(write_request).await.unwrap())
-                        as Result<tonic::Response<Empty>>
-                });
-            }
-
-            // Wait for all servers to be written to.
-            while let Some(res) = task_set.join_next().await {
-                if res.is_err() {
-                    // TODO: Propagate error
-                }
-            }
+        // Write to each chunk.
+        for chunk_index in starting_chunk..ending_chunk {
+            self.write_chunk(filename, chunk_index, start_offset, &data)
+                .await?;
         }
         Ok(())
     }

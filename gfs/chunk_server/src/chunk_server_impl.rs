@@ -1,21 +1,23 @@
-use std::{net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, num::NonZeroUsize, sync::Arc};
 
+use ::common::{conn, utils::calc_checksum};
 use anyhow::Result;
 use log::{debug, error};
 use proto::{
     common::{self, ChunkServerLocation, Empty},
     grpc::{
-        chunk_server_server::ChunkServer, master_client::MasterClient, AdvanceChunkVersionRequest,
-        ApplyMutationsRequest, GrantLeaseRequest, InitEmptyChunkRequest, WriteChunkRequest,
+        chunk_server_server::ChunkServer, master_client::MasterClient, send_chunk_data_response,
+        AdvanceChunkVersionRequest, ApplyMutationsRequest, ApplyMutationsResponse,
+        GrantLeaseRequest, InitEmptyChunkRequest, MutateResponseStatus, SendChunkDataRequest,
+        SendChunkDataResponse, WriteChunkRequest, WriteChunkResponse,
     },
 };
-use tokio::sync::Mutex;
-use tonic::Request;
+use tokio::{sync::Mutex, task::JoinSet};
+use tonic::{Request, Response};
 use url::Url;
 
-use crate::{chunk_file_manager::ChunkFileManager, lease_manager::LeaseManager};
+use crate::{buffer::Buffer, chunk_file_manager::ChunkFileManager, lease_manager::LeaseManager};
 
-#[derive(Debug)]
 pub struct ChunkServerImpl {
     // Chunk server id. This is a workaround when all chunk servers are running locally and need a
     // persistent value to identify their data directories.
@@ -29,7 +31,11 @@ pub struct ChunkServerImpl {
     lease_manager: LeaseManager,
     /// Chunk file manager.
     file_manager: ChunkFileManager,
+    /// Mutation buffer. This is used to store mutations that have not yet been applied (written to disk)
+    buffer: Buffer,
 }
+
+const BYTES_64_MB: usize = 64 * 1024 * 1024;
 
 impl ChunkServerImpl {
     /// Create a new chunk server.
@@ -50,11 +56,13 @@ impl ChunkServerImpl {
             },
             lease_manager: LeaseManager::new(),
             file_manager: ChunkFileManager::default(),
+            buffer: Buffer::new(NonZeroUsize::new(100).unwrap()),
         };
         cs.report_chunk_server().await?;
         Ok(cs)
     }
 
+    // TODO: move to anyhow errors.
     async fn report_chunk_server(&self) -> Result<(), Box<dyn std::error::Error>> {
         let mut master_client = self.master_client.lock().await;
         let report_request = Request::new(common::ChunkServer {
@@ -128,19 +136,151 @@ impl ChunkServer for ChunkServerImpl {
         Ok(tonic::Response::new(Empty {}))
     }
 
+    async fn send_chunk_data(
+        &self,
+        request: tonic::Request<SendChunkDataRequest>,
+    ) -> Result<tonic::Response<SendChunkDataResponse>, tonic::Status> {
+        let data = request.get_ref().data.to_owned();
+        let checksum = request.get_ref().checksum.to_owned();
+
+        // Check if data is too big.
+        if data.len() > (BYTES_64_MB) {
+            return Ok(tonic::Response::new(SendChunkDataResponse {
+                status: send_chunk_data_response::Status::TooBig.into(),
+            }));
+        }
+
+        // Validate checksum.
+        if checksum != calc_checksum(data.as_slice()) {
+            return Ok(tonic::Response::new(SendChunkDataResponse {
+                status: send_chunk_data_response::Status::BadData.into(),
+            }));
+        }
+
+        // Add data to buffer.
+        self.buffer.insert(checksum, data);
+        Ok(tonic::Response::new(SendChunkDataResponse {
+            status: send_chunk_data_response::Status::Ok.into(),
+        }))
+    }
+
     async fn write_chunk(
         &self,
         request: tonic::Request<WriteChunkRequest>,
-    ) -> Result<tonic::Response<Empty>, tonic::Status> {
+    ) -> Result<tonic::Response<WriteChunkResponse>, tonic::Status> {
         debug!("Got a write_chunk request: {:?}.", request);
-        Ok(tonic::Response::new(Empty {}))
+        let header = request.get_ref().header.to_owned().ok_or_else(|| {
+            error!("Got a write_chunk request with no header.");
+            tonic::Status::internal("Got a write_chunk request with no header.")
+        })?;
+
+        // Check if chunk exists and that its version isn't stale.
+        match self.file_manager.get_chunk(&header.chunk_handle) {
+            Some(chunk_file) if chunk_file.get_version() != header.chunk_version => {
+                error!("Got a write_chunk request with a bad version.");
+                return Ok(tonic::Response::new(WriteChunkResponse {
+                    status: MutateResponseStatus::StaleVersion.into(),
+                    replica_statuses: vec![],
+                }));
+            }
+            None => {
+                error!("Got a write_chunk request for a chunk that doesn't exist.");
+                return Ok(tonic::Response::new(WriteChunkResponse {
+                    status: MutateResponseStatus::ChunkNotFound.into(),
+                    replica_statuses: vec![],
+                }));
+            }
+            _ => {}
+        };
+
+        // Retrieve data from buffer and error if data isn't in the buffer.
+        let data = self.buffer.pop(&header.checksum).ok_or_else(|| {
+            error!("Got a write_chunk request with no buffered data.");
+            tonic::Status::internal("Got a write_chunk request with no buffered data.")
+        })?;
+
+        // Write data to disk.
+        self.file_manager
+            .write_chunk(&header.chunk_handle, header.start_offset, data)
+            .map_err(|e| {
+                error!("Failed to write chunk: {:?}.", e);
+                tonic::Status::internal(format!("Failed to write chunk: {}", e))
+            })?;
+
+        // Propagate mutations to replicas.
+        let replicas = request.get_ref().replica_locations.to_owned();
+        let mut join_set = JoinSet::new();
+        for replica in replicas {
+            let header = header.clone(); // Clone header for task.
+            join_set.spawn(async move {
+                let mut client =
+                    conn::connect_to_chunk_server(replica.address.to_owned(), replica.port).await?;
+                let request = ApplyMutationsRequest {
+                    headers: vec![header],
+                };
+                let res = client.apply_mutations(request).await?;
+                Ok(res) as Result<Response<ApplyMutationsResponse>>
+            });
+        }
+
+        let mut replica_statuses = Vec::new();
+        while let Some(Ok(res)) = join_set.join_next().await {
+            match res {
+                Ok(r) => {
+                    replica_statuses.push(r.get_ref().status.into());
+                }
+                Err(e) => {
+                    error!("Failed to apply mutations: {:?}.", e);
+                    replica_statuses.push(MutateResponseStatus::InternalError.into());
+                }
+            }
+        }
+
+        Ok(tonic::Response::new(WriteChunkResponse {
+            status: MutateResponseStatus::Ok.into(),
+            replica_statuses,
+        }))
     }
 
     async fn apply_mutations(
         &self,
         request: tonic::Request<ApplyMutationsRequest>,
-    ) -> Result<tonic::Response<Empty>, tonic::Status> {
-        debug!("Got a apply_mutations request: {:?}.", request);
-        Ok(tonic::Response::new(Empty {}))
+    ) -> Result<tonic::Response<ApplyMutationsResponse>, tonic::Status> {
+        let headers = request.get_ref().headers.to_owned();
+        for header in headers {
+            // Check if chunk exists and that its version isn't stale.
+            match self.file_manager.get_chunk(&header.chunk_handle) {
+                Some(chunk_file) if chunk_file.get_version() != header.chunk_version => {
+                    error!("Got a write_chunk request with a bad version.");
+                    return Ok(tonic::Response::new(ApplyMutationsResponse {
+                        status: MutateResponseStatus::StaleVersion.into(),
+                    }));
+                }
+                None => {
+                    error!("Got a write_chunk request for a chunk that doesn't exist.");
+                    return Ok(tonic::Response::new(ApplyMutationsResponse {
+                        status: MutateResponseStatus::ChunkNotFound.into(),
+                    }));
+                }
+                _ => {}
+            };
+
+            // Retrieve data from buffer and error if data isn't in the buffer.
+            let data = self.buffer.pop(&header.checksum).ok_or_else(|| {
+                error!("Got a write_chunk request with no buffered data.");
+                tonic::Status::internal("Got a write_chunk request with no buffered data.")
+            })?;
+
+            // Write data to disk.
+            self.file_manager
+                .write_chunk(&header.chunk_handle, header.start_offset, data)
+                .map_err(|e| {
+                    error!("Failed to write chunk: {:?}.", e);
+                    tonic::Status::internal(format!("Failed to write chunk: {}", e))
+                })?;
+        }
+        Ok(tonic::Response::new(ApplyMutationsResponse {
+            status: MutateResponseStatus::Ok.into(),
+        }))
     }
 }

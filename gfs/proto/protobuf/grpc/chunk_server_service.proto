@@ -10,8 +10,18 @@ service ChunkServer {
   rpc Heartbeat(common.Empty) returns (common.Empty);
   rpc AdvanceChunkVersion(AdvanceChunkVersionRequest) returns (common.Empty);
   rpc GrantLease(GrantLeaseRequest) returns (common.Empty);
-  rpc WriteChunk(WriteChunkRequest) returns (common.Empty);
-  rpc ApplyMutations(ApplyMutationsRequest) returns (common.Empty);
+
+  // SendChunkData is used to send data to the chunk server.
+  // The chunk server will buffer the data until it receives
+  // a WriteChunk call.
+  // This is called by the client.
+  rpc SendChunkData(SendChunkDataRequest) returns (SendChunkDataResponse);
+  // WriteChunk is sent to primary to write data to the chunk
+  // and trigger writes to replicas.
+  // This is only called once all replicas have received the data.
+  rpc WriteChunk(WriteChunkRequest) returns (WriteChunkResponse);
+  // ApplyMutations is sent to primary to apply mutations to replicas.
+  rpc ApplyMutations(ApplyMutationsRequest) returns (ApplyMutationsResponse);
 }
 
 message InitEmptyChunkRequest {
@@ -30,20 +40,65 @@ message GrantLeaseRequest {
   uint64 expiration_unix_secs = 3;
 }
 
-message WriteChunkRequest {
-  WriteChunkHeader header =1 ;
+message SendChunkDataRequest {
+  // The data the chunk server should buffer.
+  bytes data = 1;
+  // The checksum of the data. This is used to identity the 
+  // chunk data across network calls and chunk servers.
+  string checksum = 2;
+}
 
-  repeated common.ChunkServerLocation replica_locations = 2;
+message SendChunkDataResponse {
+  Status status = 1;
+  enum Status {
+    // The data was successfully buffered.
+    OK = 0;
+    // The checksum of the data did not match the checksum
+    // sent in the request.
+    BAD_DATA = 1;
+    // More data was sent than the chunk server can 
+    // written to a single chunk.
+    TOO_BIG = 2;
+  }
 }
 
 message WriteChunkHeader {
   string chunk_handle = 1;
   uint32 chunk_version = 2;
-  uint64 start_offset = 3;
-  bytes data = 4;
+  uint32 start_offset = 3;
+  string checksum = 4;
+}
+
+message WriteChunkRequest {
+  WriteChunkHeader header = 1;
+
+  repeated common.ChunkServerLocation replica_locations = 2;
+}
+
+enum MutateResponseStatus {
+    OK = 0;
+    // The chunk version was not the latest version.
+    STALE_VERSION = 1;
+    // Check handle was not found.
+    CHUNK_NOT_FOUND = 2;
+    // Data not found in buffer.
+    DATA_NOT_FOUND = 3;
+    // The chunk server does not have a valid lease.
+    LEASE_NOT_HELD = 4;
+    // The chunk server encountered an internal error.
+    INTERNAL_ERROR = 5;
+}
+
+message WriteChunkResponse {
+  MutateResponseStatus status = 1;
+  repeated MutateResponseStatus replica_statuses = 2;
 }
 
 
 message ApplyMutationsRequest {
-  repeated WriteChunkHeader write_chunks = 1;
+  repeated WriteChunkHeader headers = 1;
+}
+
+message ApplyMutationsResponse {
+  MutateResponseStatus status = 1;
 }

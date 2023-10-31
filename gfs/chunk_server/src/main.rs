@@ -6,6 +6,7 @@ use proto::grpc::chunk_server_server::ChunkServerServer;
 use tonic::transport::Server;
 use url::Url;
 
+mod buffer;
 mod chunk_file_manager;
 mod chunk_server_impl;
 mod lease_manager;

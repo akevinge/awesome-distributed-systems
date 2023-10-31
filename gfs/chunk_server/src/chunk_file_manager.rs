@@ -1,6 +1,8 @@
 use std::{
-    fs::{create_dir_all, File},
+    fmt::Write,
+    fs::{create_dir_all, File, OpenOptions},
     io,
+    os::unix::prelude::FileExt,
 };
 
 use anyhow::{anyhow, Result};
@@ -12,6 +14,12 @@ pub struct ChunkFile {
     filename: String,
     version: u32,
     disk_path: String,
+}
+
+impl ChunkFile {
+    pub fn get_version(&self) -> u32 {
+        self.version
+    }
 }
 
 #[derive(Debug, Default)]
@@ -27,6 +35,10 @@ const GLOBALCHUNK_SERVER_DIR: &str = "global_disk/data/";
 const BYTES_64_MB: &u64 = &(64 * 1024 * 1024);
 
 impl ChunkFileManager {
+    pub fn get_chunk(&self, chunk_handle: &String) -> Option<ChunkFile> {
+        self.chunk_files.get(chunk_handle).to_owned()
+    }
+
     pub fn advance_chunk_version(&self, chunk_handle: &String, new_version: u32) -> Result<()> {
         let mut chunk_file = self.chunk_files.get(chunk_handle).ok_or(anyhow!(
             "chunk handle {} not found for version",
@@ -73,6 +85,37 @@ impl ChunkFileManager {
         self.chunk_files.insert(chunk_handle, chunk);
         Ok(())
     }
+
+    pub fn write_chunk(
+        &self,
+        chunk_handle: &String,
+        start_offset: u32,
+        data: Vec<u8>,
+    ) -> Result<()> {
+        let chunk_file = self
+            .chunk_files
+            .get(chunk_handle)
+            .ok_or(WriteChunkError::ChunkDoesNotExist)?;
+
+        let file = File::options()
+            .write(true)
+            .open(&chunk_file.disk_path)
+            .or_else(|e| {
+                Err(WriteChunkError::OpenFileError {
+                    file: chunk_file.disk_path.to_owned(),
+                    source: e,
+                })
+            })?;
+
+        let _ = file.write_all_at(&data, start_offset as u64).or_else(|e| {
+            Err(WriteChunkError::WriteFileError {
+                file: chunk_file.disk_path.to_owned(),
+                source: e,
+            })
+        })?;
+
+        Ok(())
+    }
 }
 
 #[derive(Debug, Error)]
@@ -95,6 +138,24 @@ pub enum InitChunkError {
     AllocateSizeError {
         file: String,
         size: u64,
+        #[source]
+        source: io::Error,
+    },
+}
+
+#[derive(Debug, Error)]
+pub enum WriteChunkError {
+    #[error("chunk does not exist.")]
+    ChunkDoesNotExist,
+    #[error("error opening file: {file}, err: {source}.")]
+    OpenFileError {
+        file: String,
+        #[source]
+        source: io::Error,
+    },
+    #[error("error writing to file: {file}, err: {source}.")]
+    WriteFileError {
+        file: String,
         #[source]
         source: io::Error,
     },

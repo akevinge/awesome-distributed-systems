@@ -8,6 +8,10 @@ struct Args {
     operation: Operation,
     #[arg(short, long)]
     filename: String,
+    #[arg(short, long)]
+    data: String,
+    #[arg(short, long)]
+    offset: u32,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -25,7 +29,11 @@ async fn main() -> Result<()> {
         Operation::Open => client.open(&args.filename).await?,
         Operation::Write => {
             client
-                .write(&args.filename, 0, "010101010".to_string().into_bytes())
+                .write(
+                    &args.filename,
+                    args.offset,
+                    args.data.to_owned().into_bytes(),
+                )
                 .await?
         }
     }
